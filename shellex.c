@@ -37,31 +37,47 @@ void eval(char *cmdline)
     strcpy(buf, cmdline);
     bg = parseline(buf, argv); 
     if (argv[0] == NULL)  
-	return;   /* Ignore empty lines */
-    if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
-        if (execve(argv[0], argv, environ) < 0) {	//ex) /bin/ls ls -al &
-            printf("%s: Command not found.\n", argv[0]);
-            exit(0);
-        }
+	    return;   /* Ignore empty lines */
 
-	/* Parent waits for foreground job to terminate */
-	if (!bg){ 
-	    int status;
-	}
-	else//when there is backgrount process!
-	    printf("%d %s", pid, cmdline);
+
+    if (builtin_command(argv)) return;
+
+    pid = Fork();
+    
+    //child
+    if (pid == 0 && execvp(argv[0], argv) < 0) {
+        printf("%s: Command not found.\n", argv[0]);
+        exit(0);
     }
-    return;
+    
+    // parent
+    if (!bg) { // foreground task
+        int status;
+        Waitpid(pid, &status, 0);
+    }
+    else { // background task
+        printf("%d %s", pid, cmdline);
+        // TODO: add pid to task list
+    }
+
 }
 
 /* If first arg is a builtin command, run it and return true */
 int builtin_command(char **argv) 
 {
-    if (!strcmp(argv[0], "quit")) /* quit command */
-	exit(0);  
-    if (!strcmp(argv[0], "&"))    /* Ignore singleton & */
-	return 1;
-    return 0;                     /* Not a builtin command */
+    if (!strcmp(argv[0], "quit") || !strcmp(argv[0], "exit")) { /* quit command */
+	    exit(0);  
+    }
+    if (!strcmp(argv[0], "&")) { /* Ignore singleton & */
+	    return 1;
+    }
+    if (!strcmp(argv[0], "cd")) {
+        if (chdir(argv[1])) {
+            printf("invalid directory: %s\n", argv[1]);
+        }
+        return 1;
+    }
+    return 0; /* Not a builtin command */
 }
 /* $end eval */
 
