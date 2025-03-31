@@ -4,7 +4,8 @@
 #define MAXARGS   128
 
 /* Function prototypes */
-void eval(char *cmdline);
+void eval(char *cmdline, int in_fd, int out_fd);
+void eval_pipeline(char *cmdline, int out_fd);
 int parseline(char *buf, char **argv);
 int builtin_command(char **argv); 
 
@@ -13,21 +14,68 @@ int main()
     char cmdline[MAXLINE]; /* Command line */
 
     while (1) {
-	/* Read */
-	printf("> ");                   
-	fgets(cmdline, MAXLINE, stdin); 
-	if (feof(stdin))
-	    exit(0);
+        /* Read */
+        printf("> ");                   
+        fgets(cmdline, MAXLINE, stdin); 
+        if (feof(stdin))
+            exit(0);
 
-	/* Evaluate */
-	eval(cmdline);
+        /* Evaluate */
+        eval_pipeline(cmdline, STDOUT_FILENO);
     } 
 }
 /* $end shellmain */
-  
+
+int contains_pipeline(char* cmdline) {
+    int quote = 0;
+    for (int i=0; cmdline[i]!=0; i++) {
+        if (quote && cmdline[i] == '\"') quote = 0;
+        else {
+            if (cmdline[i] == '\"') quote = 1;
+            else if (cmdline[i] == '|') return 1;
+        }
+    }
+    return 0;
+}
+
+// get the righttmost command
+char* get_last_command(char *cmdline) { 
+    int quote = 0;
+    int len = strlen(cmdline);
+    for (int i=len-1; i>=0; i--) {
+        if (quote && cmdline[i]=='\"') quote = 0;
+        else {
+            if (cmdline[i] == '\"') quote = 1;
+            else if (cmdline[i] == '|') {
+                cmdline[i] = '\0';
+                return cmdline + i + 1;
+            }
+        }
+    }
+}
+
+void eval_pipeline(char *cmdline, int out_fd) {
+    char* cmd;
+    int pipefd[2], status;
+    if (!contains_pipeline(cmdline)) {
+        eval(cmdline, STDIN_FILENO, out_fd);
+        return;
+    }
+
+    // pipeline exists
+    cmd = get_last_command(cmdline);
+    
+    pipe(pipefd);
+    eval_pipeline(cmdline, pipefd[1]);
+    eval(cmd, pipefd[0], out_fd);
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+}
+
 /* $begin eval */
 /* eval - Evaluate a command line */
-void eval(char *cmdline) 
+void eval(char *cmdline, int in_fd, int out_fd) 
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
@@ -45,21 +93,31 @@ void eval(char *cmdline)
     pid = Fork();
     
     //child
-    if (pid == 0 && execvp(argv[0], argv) < 0) {
-        printf("%s: Command not found.\n", argv[0]);
-        exit(0);
+    if (pid == 0) {
+        if (in_fd != STDIN_FILENO)
+            dup2(in_fd, STDIN_FILENO);
+        if (out_fd != STDOUT_FILENO) {
+            dup2(out_fd, STDOUT_FILENO);
+            dup2(out_fd, STDERR_FILENO);
+        }
+        if (execvp(argv[0], argv) < 0) {
+            printf("%s: Command not found.\n", argv[0]);
+            exit(0);
+        }
+        return;
     }
     
     // parent
     if (!bg) { // foreground task
         int status;
         Waitpid(pid, &status, 0);
+        if (out_fd != STDOUT_FILENO) close(out_fd); // **IMPORTANT** send EOF to the pipe
     }
     else { // background task
         printf("%d %s", pid, cmdline);
         // TODO: add pid to task list
     }
-
+    
 }
 
 /* If first arg is a builtin command, run it and return true */
